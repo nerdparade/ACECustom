@@ -1394,6 +1394,10 @@ namespace ACE.Server.Network.Structure
             // master switch OFF = inert, as before
             var zcT10 = zcLocked && ACE.Server.Managers.ZoneControl.ZoneLockFallback.Active;
 
+            // T11+ roll ranges: the band each recorded card can roll at this weapon's tier, shown at the end of its line.
+            // None while locked - the lines show the locked values then, and a band beside them would mislead.
+            var cardRanges = zcLocked ? null : WeaponCardRanges(weapon);
+
             // Determine skill: explicit WeaponSkill, or fallback for Casters (Wands)
             var checkSkill = weapon.WeaponSkill;
             if (checkSkill == Skill.None && weapon is Caster)
@@ -1415,14 +1419,16 @@ namespace ACE.Server.Network.Structure
                 var niceName = slayerAll
                     ? "All Creatures"
                     : CreatureNameRegex().Replace(weapon.SlayerCreatureType.ToString(), " $1");
-                effectDescriptions.Add($"- {niceName} Slayer: {bonus:0.##}x Damage");
+                effectDescriptions.Add($"- {niceName} Slayer: {bonus:0.##}x Damage"
+                    + MultiplierRange(cardRanges, ZoneStatResolver.WeaponSlayerKey));
             }
 
             // Biting Strike
             if (weapon.CriticalFrequency.HasValue)
             {
                 var val = zcLocked ? WorldObject.LockedCritFrequency(weapon) : weapon.CriticalFrequency.Value;   // locked: the combat fallback crit rate
-                effectDescriptions.Add($"- Biting Strike: +{val:P0} Crit Chance");
+                effectDescriptions.Add($"- Biting Strike: +{val:P0} Crit Chance"
+                    + PercentRange(cardRanges, ZoneStatResolver.WeaponBiteKey, "P0"));
             }
 
             // Cleaving (multi-target): the raw prop stores TOTAL targets (extra + 1), so raw-prop
@@ -1471,7 +1477,8 @@ namespace ACE.Server.Network.Structure
             if (weapon.GetProperty(PropertyFloat.CriticalMultiplier) > 1.0f)
             {
                 var val = zcLocked ? WorldObject.LockedCritDamageMultiplier(weapon) + 1.0 : weapon.GetProperty(PropertyFloat.CriticalMultiplier).Value + 1.0;   // locked: the combat fallback (T10 cap, or a plain 2x crit with the master switch off)
-                effectDescriptions.Add($"- Crushing Blow: {val:0.##}x Crit Dmg");
+                effectDescriptions.Add($"- Crushing Blow: {val:0.##}x Crit Dmg"
+                    + MultiplierRange(cardRanges, ZoneStatResolver.WeaponCrushKey));
             }
 
             // Crippling Blow - hidden only when it is actually inert on THIS weapon. An item panel
@@ -1501,7 +1508,9 @@ namespace ACE.Server.Network.Structure
                     : rendOverride.HasValue
                     ? Math.Clamp(rendOverride.Value, 0.0, 1.0)
                     : 1.0 - WorldObject.GetArmorRendingMod(skill);
-                effectDescriptions.Add($"- {ImbuedEffectType.ArmorRending.DisplayName()}: {ignored:P1} Ignored");
+                // the range only beside the card's own value (the override); a retail skill-formula rend has no band
+                effectDescriptions.Add($"- {ImbuedEffectType.ArmorRending.DisplayName()}: {ignored:P1} Ignored"
+                    + (rendOverride.HasValue ? PercentRange(cardRanges, ZoneStatResolver.WeaponArmorRendKey, "P1") : ""));
             }
 
             // Critical Strike - hidden for players, same reason as Crippling Blow above.
@@ -1546,20 +1555,27 @@ namespace ACE.Server.Network.Structure
                     // never stacked - but that is an implementation detail of the resist chain and has
                     // no business on a player-facing line. A rend is a rend.
                     var bonusPct = zcLocked && !zcT10 ? 0.0 : (mod - 1.0);   // locked: the retail rend (T10); master switch off: skipped
-                    effectDescriptions.Add($"- {type.DisplayName()}: +{bonusPct:P0} Dmg");
+                    // Rend Power range: only when the card's override is what the line shows. The ends go through the same
+                    // float (1 + override) - 1 as the value, so they round the same way.
+                    var rendRange = rendOverride.HasValue && rendOverride.Value > 0
+                        ? PercentRange(cardRanges, ZoneStatResolver.WeaponRendPowerKey, "P0", v => (1.0f + (float)v) - 1.0)
+                        : "";
+                    effectDescriptions.Add($"- {type.DisplayName()}: +{bonusPct:P0} Dmg" + rendRange);
                 }
             }
 
             // Shield Cleaving: fraction of the target's shield AL the weapon ignores. Stored directly on
             // the weapon (PropertyFloat.IgnoreShield); GetIgnoreShieldMod reads it at hit time.
             if (weapon.IgnoreShield.HasValue && weapon.IgnoreShield.Value > 0)
-                effectDescriptions.Add($"- Shield Cleaving: {(zcLocked ? 0.0 : Math.Clamp(weapon.IgnoreShield.Value, 0.0, 1.0)):P0} Shield Ignored");   // locked: off (owner 2026-10-07)
+                effectDescriptions.Add($"- Shield Cleaving: {(zcLocked ? 0.0 : Math.Clamp(weapon.IgnoreShield.Value, 0.0, 1.0)):P0} Shield Ignored"   // locked: off (owner 2026-10-07)
+                    + PercentRange(cardRanges, ZoneStatResolver.WeaponShieldCleaveKey, "P0"));
 
             // Spell Armor Rend (casters): fraction of the monster's Spell Armor level the wand's spells ignore. Stored directly
             // on the weapon (PropertyFloat.ZcSpellArmorRend); Creature.GetZcSpellArmorMod reads it at hit time.
             var spellArmorRend = weapon.GetProperty(PropertyFloat.ZcSpellArmorRend);
             if (spellArmorRend.HasValue && spellArmorRend.Value > 0)
-                effectDescriptions.Add($"- Spell Armor Rend: {(zcLocked ? 0.0 : Math.Clamp(spellArmorRend.Value, 0.0, 1.0)):P0} Spell Armor Ignored");   // locked: off, like the other cards
+                effectDescriptions.Add($"- Spell Armor Rend: {(zcLocked ? 0.0 : Math.Clamp(spellArmorRend.Value, 0.0, 1.0)):P0} Spell Armor Ignored"   // locked: off, like the other cards
+                    + PercentRange(cardRanges, ZoneStatResolver.WeaponSpellArmorRendKey, "P0"));
 
             // Phantom (hollow): the weapon bypasses the target's protective magic - Impen/Banes on armor
             // and Life prots. RETAIL ONLY as of 2026-08-25: our loot card was deleted, so every weapon
@@ -1685,6 +1701,76 @@ namespace ACE.Server.Network.Structure
             // item enchantments can also be on wielder currently
             AddEnchantments(weapon);
         }
+
+        /// <summary>
+        /// T11+ ROLL RANGES (2026-10-29): the band each T11+ weapon card can roll at the weapon's tier, in display space,
+        /// keyed by the card's record key (ZoneStatResolver.Weapon*Key). BuildWeapon prints it at the end of the card's line -
+        /// "[38-46%]", "[2.18-2.6x]" - the way an armour modifier line ends with "[35-69]".
+        ///
+        /// Only cards in the weapon's ZcModifiers record get a range: a retail imbue, a crafted value or a pre-T11 weapon has
+        /// no band to show. The band is the RESOLVE band (WeaponResolveBand: the tier Default's authored pin, else the
+        /// T11 -> T25 ladder), the same one Compute re-stamps the property from, so a resolved weapon's value always sits
+        /// inside it. A ZONE-level pin shapes new drops in that zone only and is not shown (the weapon does not remember
+        /// its zone - the same rule the resolver follows). A Bandit Hilt's flat bonus on Biting Strike / Crushing Blow is
+        /// added to both ends, because Compute adds it to the value the line shows. Display only; nothing is written.
+        /// </summary>
+        internal static Dictionary<int, (double Min, double Max)> WeaponCardRanges(WorldObject weapon)
+        {
+            // HasWeaponKey is the allocation-free early-out: every retail and pre-T11 weapon leaves here
+            if (!ZoneStatResolver.HasWeaponKey(weapon))
+                return null;
+
+            var tier = ZoneStatResolver.TierOf(weapon);
+            if (tier <= 0)
+                tier = 11;   // Compute's rule for a record with no tier stamp
+            var hilt = ACE.Server.Managers.ZoneControl.ZoneLootMutator.HasBanditHilt(weapon);
+
+            var ranges = new Dictionary<int, (double Min, double Max)>();
+            foreach (var rec in ZoneStatResolver.Read(weapon))
+            {
+                if (!ZoneStatResolver.IsWeaponKey(rec.Key) || !ZoneStatResolver.TryGetWeapon(rec.Key, out var ws))
+                    continue;
+                var (lo, hi) = ZoneStatResolver.WeaponResolveBand(ws, tier);
+                if (hilt && ws == ZoneStatResolver.SpecBite)
+                {
+                    lo += ACE.Server.Managers.ZoneControl.ZoneLootMutator.BanditHiltCritFrequencyBonus;
+                    hi += ACE.Server.Managers.ZoneControl.ZoneLootMutator.BanditHiltCritFrequencyBonus;
+                }
+                else if (hilt && ws == ZoneStatResolver.SpecCrush)
+                {
+                    lo += ACE.Server.Managers.ZoneControl.ZoneLootMutator.BanditHiltCritMultiplierBonus;
+                    hi += ACE.Server.Managers.ZoneControl.ZoneLootMutator.BanditHiltCritMultiplierBonus;
+                }
+                ranges[rec.Key] = (lo, hi);
+            }
+            return ranges;
+        }
+
+        /// <summary>" [2.18-2.6x]" for a multiplier card (Slayer, Crushing Blow), or "" when the card has no range.
+        /// Same "0.##" rounding as the value on the line.</summary>
+        internal static string MultiplierRange(Dictionary<int, (double Min, double Max)> ranges, int key)
+        {
+            if (ranges == null || !ranges.TryGetValue(key, out var r))
+                return "";
+            return FormattableString.Invariant($" [{r.Min:0.##}-{r.Max:0.##}x]");
+        }
+
+        /// <summary>" [38-46%]" for a percent card, or "" when the card has no range. <paramref name="format"/> is the
+        /// line's own percent format (P0 / P1), so both ends round exactly like the value does. <paramref name="toShown"/>
+        /// maps a band end to the number the line prints, for a line that does not print the stored value as is.</summary>
+        internal static string PercentRange(Dictionary<int, (double Min, double Max)> ranges, int key, string format, Func<double, double> toShown = null)
+        {
+            if (ranges == null || !ranges.TryGetValue(key, out var r))
+                return "";
+            var lo = toShown != null ? toShown(r.Min) : r.Min;
+            var hi = toShown != null ? toShown(r.Max) : r.Max;
+            return $" [{PercentNumber(lo, format)}-{PercentNumber(hi, format)}%]";
+        }
+
+        /// <summary>A fraction as a bare percent number ("0.378" -> "38" for P0): the P format's own rounding, invariant
+        /// culture (plain ASCII), the percent sign and its spacing removed.</summary>
+        internal static string PercentNumber(double v, string format)
+            => v.ToString(format, System.Globalization.CultureInfo.InvariantCulture).Replace("%", "").Trim();
 
         private void BuildHookProfile(WorldObject hookedItem)
         {
