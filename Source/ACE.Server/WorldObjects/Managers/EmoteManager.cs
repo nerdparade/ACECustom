@@ -1101,6 +1101,10 @@ namespace ACE.Server.WorldObjects.Managers
                     {
                         var stat = targetObject.GetProperty((PropertyInt64)emote.Stat);
 
+                        // bank lock (/banklock): a locked bank reads as empty, so an NPC never takes payment it can't collect
+                        if (targetObject is Player inqBankPlayer && BankLock.IsBankProperty((PropertyInt64)emote.Stat) && inqBankPlayer.IsBankLocked)
+                            stat = 0;
+
                         if (stat == null && HasValidTestNoQuality(emote.Message))
                             ExecuteEmoteSet(EmoteCategory.TestNoQuality, emote.Message, targetObject, true);
                         else

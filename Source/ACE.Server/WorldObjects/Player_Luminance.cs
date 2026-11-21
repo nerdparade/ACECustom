@@ -95,6 +95,15 @@ namespace ACE.Server.WorldObjects
 
         private void AddLuminance(long amount, XpType xpType, ShareType shareType)
         {
+            // bank lock (/banklock): every award is banked, and a locked bank takes nothing in - so nothing is paid and the
+            // player is not told it was. The allegiance's share still goes up: that is not this character's bank.
+            if (IsBankLocked)
+            {
+                if (shareType.HasFlag(ShareType.Allegiance))
+                    UpdateLumAllegiance(amount);
+                return;
+            }
+
             if (!BankedLuminance.HasValue)
             {
                 BankedLuminance = 0;

@@ -136,6 +136,14 @@ namespace ACE.Server.Entity
             var gateLevel = EnlightenmentTierManager.GetGateLevel(flag) ?? tier.MinTargetEnl - 1;
             var fee = GetFee(flag);
 
+            // bank lock (/banklock): the fee can be paid from the bank and returns change from trade notes to it, neither of
+            // which works while it is locked
+            if (player.IsBankLocked)
+            {
+                player.SendMessage($"The gate fee of {fee} was not paid: your bank is locked. You were not charged.", ChatMessageType.Broadcast);
+                return;
+            }
+
             if (!player.TryPayEnlightenmentGateFee(fee, gateLevel, out var shortfall))
             {
                 player.SendMessage($"The gate fee of {fee} was not paid: you are short {JoinList(shortfall)}. You were not charged.", ChatMessageType.Broadcast);

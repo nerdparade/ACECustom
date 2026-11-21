@@ -104,6 +104,10 @@ namespace ACE.Server.Managers.ZoneControl
                 if (whole <= 0)
                     return;
 
+                // bank lock (/banklock): a locked bank takes nothing in - no coins, and no "added to your bank" line
+                if (player.IsBankLocked)
+                    return;
+
                 // economy ledger: a labeled faucet (Kill, this creature), never an unexplained bank change
                 using (PyrealLedger.BeginFor(EconomyLedger.SrcKill, victim, player))
                     player.BankedPrestigeCoins = (player.BankedPrestigeCoins ?? 0) + whole;

@@ -4044,6 +4044,14 @@ namespace ACE.Server.WorldObjects
             if (target.GetProperty(PropertyBool.ParagonCollector) == true)
             {
                 Session.Network.EnqueueSend(new GameEventInventoryServerSaveFailed(Session, item.Guid.Full));
+
+                // bank lock (/banklock): the collector pays into the bank, which takes nothing in while locked
+                if (IsBankLocked)
+                {
+                    Session.Network.EnqueueSend(new GameMessageSystemChat($"{target.Name} pays into your bank, and your bank is locked.", ChatMessageType.Broadcast));
+                    return;
+                }
+
                 ACE.Server.Entity.ParagonCollectorService.HandleGive(this, target, item, itemWasEquipped);
                 return;
             }
@@ -4054,6 +4062,15 @@ namespace ACE.Server.WorldObjects
             {
                 if (acceptAll || (emoteResult.Category == EmoteCategory.Give && target.AllowGive))
                 {
+                    // bank lock (/banklock): an NPC that pays for this item through the bank would take it and pay nothing
+                    // into a locked bank, so the player keeps it (BankLock.UsesBank looks at this emote set's own steps)
+                    if (!acceptAll && IsBankLocked && BankLock.UsesBank(emoteResult))
+                    {
+                        Session.Network.EnqueueSend(new GameMessageSystemChat($"{target.Name} pays for that into your bank, and your bank is locked.", ChatMessageType.Broadcast));
+                        Session.Network.EnqueueSend(new GameEventInventoryServerSaveFailed(Session, item.Guid.Full));
+                        return;
+                    }
+
                     // Pre-removal gate: verify the player can carry the rewards BEFORE consuming the
                     // turn-in. The reward emote chain runs asynchronously, but the turn-in is removed
                     // and Destroy()-ed synchronously below — so without this check a full inventory
