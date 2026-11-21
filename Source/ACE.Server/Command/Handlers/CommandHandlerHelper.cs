@@ -170,32 +170,8 @@ namespace ACE.Server.Command.Handlers
         /// <returns>The target, or null (already reported)</returns>
         public static WorldObject GetCommandTarget(Session session, string[] parameters, int ownParameterCount)
         {
-            if (session?.Player == null)
-            {
-                WriteOutputInfo(session, "Run this command in game - from the server console it would change a player off the world thread.");
-                return null;
-            }
-
-            if (parameters.Length <= ownParameterCount)
-                return GetLastAppraisedObject(session);
-
-            var text = string.Join(" ", parameters, ownParameterCount, parameters.Length - ownParameterCount).Trim();
-
-            // an unclosed quote ("/setproperty PropertyString.Inscription "Gift 1342184765") makes ParseCommand keep the
-            // quoted words AND repeat them as separate words - which would read as a target
-            if (ownParameterCount > 0 && parameters[ownParameterCount - 1].EndsWith(" " + text, StringComparison.Ordinal))
-            {
-                WriteOutputInfo(session, "A quote is not closed - nothing done.");
-                return null;
-            }
-
-            if (TryParseObjectId(text, out var guid))
-                return GetWorldObjectByGuid(session, guid);   // reports when not found
-
-            var player = PlayerManager.GetOnlinePlayer(text);   // case-insensitive, with or without the + admin prefix
-            if (player == null)
-                WriteOutputInfo(session, $"No online player named {text} - nothing done.");
-            return player;
+            ResolveCommandTarget(session, parameters, ownParameterCount, false, out var target, out _);
+            return target;
         }
 
         /// <summary>
@@ -214,6 +190,16 @@ namespace ACE.Server.Command.Handlers
         /// <returns>True when a target was found</returns>
         public static bool TryGetCommandTargetOrOffline(Session session, string[] parameters, int ownParameterCount, out WorldObject target, out OfflinePlayer offline)
         {
+            return ResolveCommandTarget(session, parameters, ownParameterCount, true, out target, out offline);
+        }
+
+        /// <summary>
+        /// The one set of rules behind GetCommandTarget (<paramref name="allowOffline"/> false: an online player or a nearby
+        /// object, reported exactly as before) and TryGetCommandTargetOrOffline (true: then an offline character as well).
+        /// Reports what it does not find.
+        /// </summary>
+        private static bool ResolveCommandTarget(Session session, string[] parameters, int ownParameterCount, bool allowOffline, out WorldObject target, out OfflinePlayer offline)
+        {
             target = null;
             offline = null;
 
@@ -231,7 +217,8 @@ namespace ACE.Server.Command.Handlers
 
             var text = string.Join(" ", parameters, ownParameterCount, parameters.Length - ownParameterCount).Trim();
 
-            // an unclosed quote: see GetCommandTarget
+            // an unclosed quote ("/setproperty PropertyString.Inscription "Gift 1342184765") makes ParseCommand keep the
+            // quoted words AND repeat them as separate words - which would read as a target
             if (ownParameterCount > 0 && parameters[ownParameterCount - 1].EndsWith(" " + text, StringComparison.Ordinal))
             {
                 WriteOutputInfo(session, "A quote is not closed - nothing done.");
@@ -240,6 +227,12 @@ namespace ACE.Server.Command.Handlers
 
             if (TryParseObjectId(text, out var guid))
             {
+                if (!allowOffline)
+                {
+                    target = GetWorldObjectByGuid(session, guid);   // reports when not found
+                    return target != null;
+                }
+
                 target = session.Player.FindObject(guid, Player.SearchLocations.Everywhere, out _, out _, out _) ?? PlayerManager.GetOnlinePlayer(guid);
                 if (target == null)
                     offline = PlayerManager.GetOfflinePlayer(guid);
@@ -249,10 +242,10 @@ namespace ACE.Server.Command.Handlers
             }
 
             target = PlayerManager.GetOnlinePlayer(text);   // case-insensitive, with or without the + admin prefix
-            if (target == null)
+            if (target == null && allowOffline)
                 offline = PlayerManager.GetOfflinePlayer(text);
             if (target == null && offline == null)
-                WriteOutputInfo(session, $"No character named {text} - nothing done.");
+                WriteOutputInfo(session, allowOffline ? $"No character named {text} - nothing done." : $"No online player named {text} - nothing done.");
             return target != null || offline != null;
         }
 

@@ -603,8 +603,9 @@ namespace ACE.Server.WorldObjects.Managers
                         current -= emote.Amount64 ?? 1;
                         targetObject.SetProperty(int64Property, current);
 
+                        // what was stored: a locked bank (/banklock) refuses the write, and the client must not show it as made
                         if (player != null)
-                            player.Session.Network.EnqueueSend(new GameMessagePrivateUpdatePropertyInt64(player, int64Property, current));
+                            player.Session.Network.EnqueueSend(new GameMessagePrivateUpdatePropertyInt64(player, int64Property, targetObject.GetProperty(int64Property) ?? 0));
 
                         // a lower unassigned XP balance: top it up from its overflow bank (Player_Xp)
                         if (targetObject is Player bankTarget && IsXpBalanceProperty(int64Property))
@@ -802,8 +803,9 @@ namespace ACE.Server.WorldObjects.Managers
                         current += emote.Amount64 ?? 1;
                         targetObject.SetProperty(int64Property, current);
 
+                        // what was stored: a locked bank (/banklock) refuses the write, and the client must not show it as made
                         if (player != null)
-                            player.Session.Network.EnqueueSend(new GameMessagePrivateUpdatePropertyInt64(player, int64Property, current));
+                            player.Session.Network.EnqueueSend(new GameMessagePrivateUpdatePropertyInt64(player, int64Property, targetObject.GetProperty(int64Property) ?? 0));
 
                         if (targetObject is Player bankTarget && IsXpBalanceProperty(int64Property))
                             bankTarget.RefillAvailableXpFromOverflow();

@@ -2177,7 +2177,8 @@ namespace ACE.Server.WorldObjects
 
         /// <summary>
         /// Bank lock (/banklock): a locked bank takes nothing in, so a transfer to one is refused here, before anything leaves
-        /// this bank. True when it was refused (the sender has been told).
+        /// this bank. True when it was refused. The sender is not told why: a lock is a staff action, not other players'
+        /// business. The transfer log says it.
         /// </summary>
         private bool RefuseLockedRecipient(IPlayer tarplayer, string operation, string currencyType, long amount, string destination)
         {
@@ -2185,7 +2186,7 @@ namespace ACE.Server.WorldObjects
                 return false;
 
             LogTransfer(operation, currencyType, amount, destination, false, "Target bank locked");
-            Session.Network.EnqueueSend(new GameMessageSystemChat($"{tarplayer.Name}'s bank is locked and can't receive transfers.", ChatMessageType.System));
+            Session.Network.EnqueueSend(new GameMessageSystemChat($"{tarplayer.Name} can't receive bank transfers right now.", ChatMessageType.System));
             return true;
         }
 

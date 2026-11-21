@@ -468,10 +468,16 @@ namespace ACE.Server.Entity
                 Redraw(player, items, false);
                 if (chargeOnTry && fee > 0)
                 {
-                    // the colour was never offered, so the try is not owed: back to the bank, whichever purse paid
-                    player.BankedPyreals = (player.BankedPyreals ?? 0) + fee;
-                    player.SaveBiotaToDatabase();
-                    log.Info($"[Dye] {player.Name}: popup could not be shown; {fee} pyreals returned to the bank");
+                    // the colour was never offered, so the try is not owed: back to the bank, whichever purse paid - unless the
+                    // bank is locked (/banklock), which takes nothing in
+                    if (player.IsBankLocked)
+                        log.Warn($"[Dye] {player.Name}: popup could not be shown; {fee} pyreals NOT returned - the bank is locked");
+                    else
+                    {
+                        player.BankedPyreals = (player.BankedPyreals ?? 0) + fee;
+                        player.SaveBiotaToDatabase();
+                        log.Info($"[Dye] {player.Name}: popup could not be shown; {fee} pyreals returned to the bank");
+                    }
                 }
                 Say(player, null, "Answer the popup you already have open first.");
             }

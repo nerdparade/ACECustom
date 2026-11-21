@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Linq;
 using System.Text;
 
@@ -31,12 +32,14 @@ namespace ACE.Server.Command.Handlers
             "<character name or id> - shows the bank\n/bankwipe confirm <character id> - wipes it to 0")]
         public static void HandleBankWipe(Session session, params string[] parameters)
         {
-            if (parameters[0].Equals("confirm", StringComparison.OrdinalIgnoreCase))
+            // /bankwipe confirm <id>: only the character this staff member was just shown (BankWipePreviews). Player ids run in
+            // sequence, so a mistyped id names another real character - it must never be wiped unseen.
+            if (parameters.Length == 2 && parameters[0].Equals("confirm", StringComparison.OrdinalIgnoreCase)
+                && CommandHandlerHelper.TryParseObjectId(parameters[1].Trim(), out var guid))
             {
-                // the id the preview gave, so the wipe can only land on the character that was shown
-                if (parameters.Length != 2 || !CommandHandlerHelper.TryParseObjectId(parameters[1].Trim(), out var guid))
+                if (!BankWipePreviews.TryConsume(session.Player.Guid.Full, guid, DateTime.UtcNow))
                 {
-                    CommandHandlerHelper.WriteOutputInfo(session, "Confirm with the character's id, as /bankwipe <name> shows it: /bankwipe confirm 0x50001234");
+                    CommandHandlerHelper.WriteOutputInfo(session, $"Nothing wiped: you have not just been shown the bank of 0x{guid:X8}. Type /bankwipe <name or id> first, then confirm the id it shows within {BankWipePreviews.Lifetime.TotalMinutes:0} minutes.");
                     return;
                 }
 
@@ -51,8 +54,13 @@ namespace ACE.Server.Command.Handlers
                 return;
             }
 
+            // anything else names the character to show, a character called "Confirm ..." included
             if (!CommandHandlerHelper.TryGetCharacter(session, parameters, 0, out var target))
+            {
+                if (parameters[0].Equals("confirm", StringComparison.OrdinalIgnoreCase))
+                    CommandHandlerHelper.WriteOutputInfo(session, "To wipe, confirm the id the bank was shown with: /bankwipe confirm 0x50001234");
                 return;
+            }
 
             var balances = BankLock.ReadStored(target);
             var coinFraction = target.GetProperty(PropertyFloat.PrestigeCoinFraction) ?? 0;
@@ -70,7 +78,10 @@ namespace ACE.Server.Command.Handlers
             if (balances.All(b => b.Amount == 0) && coinFraction <= 0)
                 sb.Append("It is empty - nothing to wipe.");
             else
-                sb.Append($"To wipe all of it to 0, type: /bankwipe confirm 0x{target.Guid.Full:X8}");
+            {
+                BankWipePreviews.Remember(session.Player.Guid.Full, target.Guid.Full, DateTime.UtcNow);
+                sb.Append($"To wipe all of it to 0, type within {BankWipePreviews.Lifetime.TotalMinutes:0} minutes: /bankwipe confirm 0x{target.Guid.Full:X8}");
+            }
 
             CommandHandlerHelper.WriteOutputInfo(session, sb.ToString());
         }
@@ -165,6 +176,40 @@ namespace ACE.Server.Command.Handlers
         private static string Who(IPlayer character)
         {
             return $"{character.Name} (0x{character.Guid.Full:X8}, {(character is Player ? "online" : "offline")})";
+        }
+    }
+
+    /// <summary>
+    /// /bankwipe confirm only wipes the character its staff member was just shown. Player ids run in sequence, so a mistyped
+    /// id would otherwise name another real character and wipe it unseen. One preview per staff member, good for
+    /// <see cref="Lifetime"/>, used up by the wipe.
+    /// </summary>
+    internal static class BankWipePreviews
+    {
+        /// <summary>How long a preview can be confirmed.</summary>
+        public static readonly TimeSpan Lifetime = TimeSpan.FromMinutes(2);
+
+        private static readonly ConcurrentDictionary<uint, (uint Character, DateTime Until)> previews = new ConcurrentDictionary<uint, (uint Character, DateTime Until)>();
+
+        /// <summary>Remembers that <paramref name="staff"/> was shown the bank of <paramref name="character"/>, in place of any earlier preview.</summary>
+        public static void Remember(uint staff, uint character, DateTime nowUtc)
+        {
+            previews[staff] = (character, nowUtc + Lifetime);
+        }
+
+        /// <summary>True, and the preview used up, when <paramref name="staff"/>'s current preview is of <paramref name="character"/> and still good.</summary>
+        public static bool TryConsume(uint staff, uint character, DateTime nowUtc)
+        {
+            if (!previews.TryGetValue(staff, out var preview) || preview.Character != character || nowUtc > preview.Until)
+                return false;
+
+            return previews.TryRemove(staff, out _);
+        }
+
+        /// <summary>Forgets every preview (tests).</summary>
+        internal static void Clear()
+        {
+            previews.Clear();
         }
     }
 }

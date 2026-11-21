@@ -6,16 +6,18 @@ using Microsoft.VisualStudio.TestTools.UnitTesting;
 using ACE.Entity.Enum;
 using ACE.Entity.Enum.Properties;
 using ACE.Entity.Models;
+using ACE.Server.Command.Handlers;
 using ACE.Server.Managers;
 
 namespace ACE.Server.Tests
 {
     /// <summary>
-    /// Bank lock (2026-11-20, /banklock): which properties are the bank, which NPC emote sets move bank currency (a locked
-    /// player keeps the item instead of handing it over for nothing), the staff write that still reaches a locked bank, and
-    /// the property id.
+    /// Bank lock (2026-11-20, /banklock): which properties are the bank, which NPC emote sets pay only through the bank (a
+    /// locked player keeps the item instead of handing it over for nothing), the staff write that still reaches a locked
+    /// bank, the property id, and /bankwipe confirm only wiping the character its staff member was just shown.
     /// </summary>
     [TestClass]
+    [DoNotParallelize]
     public class BankLockTests
     {
         private static readonly PropertyInt64[] Balances =
@@ -60,19 +62,32 @@ namespace ACE.Server.Tests
             Assert.AreEqual("Enlightenment Tokens", BankLock.Currencies[7].Name);
         }
 
+        /// <summary>Luminance is banked, so a hand-in whose only reward is luminance would go for nothing. A quest stamp is not a reward.</summary>
         [TestMethod]
-        public void UsesBank_LuminanceAwardsAreBanked()
+        public void UsesBank_LuminanceAsTheOnlyReward()
         {
-            Assert.IsTrue(BankLock.UsesBank(Set(Step(EmoteType.Give), Step(EmoteType.AwardLuminance))));
+            Assert.IsTrue(BankLock.UsesBank(Set(Step(EmoteType.AwardLuminance))));
+            Assert.IsTrue(BankLock.UsesBank(Set(Step(EmoteType.StampQuest), Step(EmoteType.AwardLuminance))));
         }
 
-        /// <summary>The lum token NPCs pay with IncrementInt64Stat on BankedLuminance; any Int64 stat step on a balance counts.</summary>
+        /// <summary>With another reward, or a branch to steps not looked at, the hand-in goes ahead and only the luminance is not paid.</summary>
+        [TestMethod]
+        public void UsesBank_LuminanceBesideAnotherRewardOrABranch()
+        {
+            Assert.IsFalse(BankLock.UsesBank(Set(Step(EmoteType.AwardLuminance), Step(EmoteType.Give))));
+            Assert.IsFalse(BankLock.UsesBank(Set(Step(EmoteType.AwardXP), Step(EmoteType.AwardLuminance))));
+            Assert.IsFalse(BankLock.UsesBank(Set(Step(EmoteType.AwardLuminance), Step(EmoteType.InqQuest))));
+            Assert.IsFalse(BankLock.UsesBank(Set(Step(EmoteType.AwardLuminance), Step(EmoteType.Goto))));
+        }
+
+        /// <summary>The lum token NPCs pay with IncrementInt64Stat on BankedLuminance; any Int64 stat step on a balance counts, whatever else the set gives.</summary>
         [TestMethod]
         public void UsesBank_Int64StatStepsOnABalance()
         {
             Assert.IsTrue(BankLock.UsesBank(Set(Step(EmoteType.IncrementInt64Stat, PropertyInt64.BankedLuminance))));
             Assert.IsTrue(BankLock.UsesBank(Set(Step(EmoteType.DecrementInt64Stat, PropertyInt64.BankedPrestigeCoins))));
             Assert.IsTrue(BankLock.UsesBank(Set(Step(EmoteType.SetInt64Stat, PropertyInt64.BankedPyreals))));
+            Assert.IsTrue(BankLock.UsesBank(Set(Step(EmoteType.Give), Step(EmoteType.IncrementInt64Stat, PropertyInt64.BankedLuminance))));
         }
 
         [TestMethod]
@@ -112,6 +127,40 @@ namespace ACE.Server.Tests
                 var used = Enum.GetValues(type).Cast<object>().Any(v => Convert.ToInt64(v) == 56300);
                 Assert.IsFalse(used, $"56300 is used in {type.Name}");
             }
+        }
+
+        /// <summary>/bankwipe confirm: only the character the same staff member was shown, once, and only while the preview is good.</summary>
+        [TestMethod]
+        public void BankWipePreviews_ConfirmOnlyThePreviewedCharacterOnce()
+        {
+            var now = new DateTime(2026, 11, 20, 20, 0, 0, DateTimeKind.Utc);
+            BankWipePreviews.Remember(0x50000011, 0x50000100, now);
+
+            Assert.IsFalse(BankWipePreviews.TryConsume(0x50000011, 0x50000101, now));   // a mistyped id: the next character
+            Assert.IsFalse(BankWipePreviews.TryConsume(0x50000012, 0x50000100, now));   // another staff member
+            Assert.IsTrue(BankWipePreviews.TryConsume(0x50000011, 0x50000100, now.AddMinutes(1)));
+            Assert.IsFalse(BankWipePreviews.TryConsume(0x50000011, 0x50000100, now.AddMinutes(1)));   // used up
+        }
+
+        [TestMethod]
+        public void BankWipePreviews_Expire()
+        {
+            var now = new DateTime(2026, 11, 20, 20, 0, 0, DateTimeKind.Utc);
+            BankWipePreviews.Remember(0x50000021, 0x50000200, now);
+
+            Assert.IsFalse(BankWipePreviews.TryConsume(0x50000021, 0x50000200, now + BankWipePreviews.Lifetime + TimeSpan.FromSeconds(1)));
+        }
+
+        /// <summary>A new preview replaces the last one: only the character shown most recently can be wiped.</summary>
+        [TestMethod]
+        public void BankWipePreviews_NewPreviewReplacesTheLast()
+        {
+            var now = new DateTime(2026, 11, 20, 20, 0, 0, DateTimeKind.Utc);
+            BankWipePreviews.Remember(0x50000031, 0x50000300, now);
+            BankWipePreviews.Remember(0x50000031, 0x50000301, now);
+
+            Assert.IsFalse(BankWipePreviews.TryConsume(0x50000031, 0x50000300, now));
+            Assert.IsTrue(BankWipePreviews.TryConsume(0x50000031, 0x50000301, now));
         }
 
         private static PropertiesEmote Set(params PropertiesEmoteAction[] steps)

@@ -27,12 +27,13 @@ namespace ACE.Server.Managers
     /// return 0 for it, so every "can you pay" test that counts the bank sees nothing there, and nothing is handed over
     /// against a debit that would then be refused.</item>
     /// <item>The ways in that a player uses take nothing and say why: /bank and /b, /clap, using a lum token, selling to a
-    /// vendor, handing an NPC an item it pays for through the bank, the Paragon Collector, an enlightenment gate fee, and a
-    /// transfer TO a locked character (refused before anything leaves the sender's bank).</item>
+    /// vendor, handing an NPC an item it pays for only through the bank (<see cref="UsesBank"/>), the Paragon Collector, an
+    /// enlightenment gate fee the pack's coins can't cover, and a transfer TO a locked character (refused before anything
+    /// leaves the sender's bank; the sender is not told why).</item>
     /// </list>
     /// Income nobody hands anything over for (kill pyreals, Prestige Coins and luminance, quest luminance, Powerball
-    /// winnings, refunds) is simply not paid while the bank is locked. Staff reads (/getproperty, /propertydump, /bankwipe,
-    /// /banklock) and the ledgers read the stored balances.
+    /// winnings, refunds - which then say they were not paid) is simply not paid while the bank is locked. Staff reads
+    /// (/getproperty, /propertydump, /bankwipe, /banklock) and the ledgers read the stored balances.
     /// </summary>
     public static class BankLock
     {
@@ -139,32 +140,73 @@ namespace ACE.Server.Managers
         }
 
         /// <summary>
-        /// True when an NPC's emote set moves banked currency in one of its own steps: an Int64 stat step on a banked
-        /// currency, or a luminance award (every luminance award is banked, Player_Luminance.AddLuminance). The sets it goes
-        /// on to are not followed; their steps simply do nothing to a locked bank.
+        /// True when a locked player should keep an item rather than hand it to an NPC with this Give emote set, because the
+        /// set pays for it through the bank: an Int64 stat step on a banked currency (the lum token NPCs), or a luminance award
+        /// (every luminance award is banked, Player_Luminance.AddLuminance) that is the only reward. With an item, XP, skill,
+        /// credit, spell, title, treasure or contract as well - or a branch (Goto, an Inq test) to steps not looked at here -
+        /// the hand-in goes ahead, and only its luminance is not paid. Quest stamps are bookkeeping, not a reward.
         /// </summary>
         public static bool UsesBank(PropertiesEmote emoteSet)
         {
             if (emoteSet?.PropertiesEmoteAction == null)
                 return false;
 
+            var awardsLuminance = false;
+            var otherReward = false;
+
             foreach (var action in emoteSet.PropertiesEmoteAction)
             {
-                switch ((EmoteType)action.Type)
-                {
-                    case EmoteType.AwardLuminance:
-                        return true;
+                var type = (EmoteType)action.Type;
 
+                switch (type)
+                {
                     case EmoteType.IncrementInt64Stat:
                     case EmoteType.DecrementInt64Stat:
                     case EmoteType.SetInt64Stat:
                         if (action.Stat.HasValue && IsBankProperty((PropertyInt64)action.Stat.Value))
                             return true;
                         break;
+
+                    case EmoteType.AwardLuminance:
+                        awardsLuminance = true;
+                        break;
+
+                    default:
+                        if (IsOtherReward(type))
+                            otherReward = true;
+                        break;
                 }
             }
 
-            return false;
+            return awardsLuminance && !otherReward;
+        }
+
+        /// <summary>
+        /// A step that makes a hand-in worth doing without its luminance: an item, XP, skill, credit, spell, title, treasure or
+        /// contract - or a branch to steps UsesBank does not follow (Goto, and every Inq test).
+        /// </summary>
+        private static bool IsOtherReward(EmoteType type)
+        {
+            switch (type)
+            {
+                case EmoteType.Give:
+                case EmoteType.AwardXP:
+                case EmoteType.AwardNoShareXP:
+                case EmoteType.AwardLevelProportionalXP:
+                case EmoteType.AwardLevelProportionalSkillXP:
+                case EmoteType.AwardSkillXP:
+                case EmoteType.AwardSkillPoints:
+                case EmoteType.AwardTrainingCredits:
+                case EmoteType.TeachSpell:
+                case EmoteType.AddCharacterTitle:
+                case EmoteType.CreateTreasure:
+                case EmoteType.AddContract:
+                case EmoteType.Goto:
+                    return true;
+
+                default:
+                    return type.ToString().StartsWith("Inq", StringComparison.Ordinal);
+            }
         }
 
         // ---- staff commands -------------------------------------------------------------------------------------------

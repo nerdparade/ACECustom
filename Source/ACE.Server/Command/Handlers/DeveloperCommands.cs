@@ -2519,8 +2519,15 @@ namespace ACE.Server.Command.Handlers
 
             target.SaveBiotaToDatabase();
 
-            session.Network.EnqueueSend(new GameMessageSystemChat($"{target.Name} (0x{target.Guid.Full:X8}, offline): {prop} = {value}", ChatMessageType.Broadcast));
-            PlayerManager.BroadcastToAuditChannel(session.Player, $"{session.Player.Name} changed a property for {target.Name} ({target.Guid}, offline): {prop} = {value}");
+            // the online path tops up the unassigned XP from its saved overflow at once; offline that happens the next time the
+            // character spends XP (Player_Xp.RefillAvailableXpFromOverflow), so say so
+            var xpNote = propType.Equals("PropertyInt64", StringComparison.OrdinalIgnoreCase)
+                && ((PropertyInt64)property == PropertyInt64.AvailableExperience || (PropertyInt64)property == PropertyInt64.OverflowExperience)
+                ? " (saved XP tops up their unassigned XP the next time they spend XP)"
+                : "";
+
+            session.Network.EnqueueSend(new GameMessageSystemChat($"{target.Name} (0x{target.Guid.Full:X8}, offline): {prop} = {value}{xpNote}", ChatMessageType.Broadcast));
+            PlayerManager.BroadcastToAuditChannel(session.Player, $"{session.Player.Name} changed a property for {target.Name} ({target.Guid}, offline): {prop} = {value}{xpNote}");
         }
 
         /// <summary>
