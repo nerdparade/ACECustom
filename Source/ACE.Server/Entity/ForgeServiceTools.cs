@@ -359,6 +359,14 @@ namespace ACE.Server.Entity
                 Say(player, null, reason);
                 return;
             }
+            // A popup already open means the keep-it question could not be shown: say so before anything is charged. The
+            // refund further down stays for the rare popup that opens in between, but it goes to the bank, and a locked bank
+            // (/banklock) takes nothing in.
+            if (player.ConfirmationManager.IsPending(ConfirmationType.Yes_No))
+            {
+                Say(player, null, "Answer the popup you already have open first.");
+                return;
+            }
             if (!TryLock(player, Math.Max(5, ServerConfig.forge_dye_preview_seconds.Value)))
             {
                 Say(player, null, "Finish what you are doing at the forge first.");

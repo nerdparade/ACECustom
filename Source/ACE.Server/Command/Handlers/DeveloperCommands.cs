@@ -602,7 +602,7 @@ namespace ACE.Server.Command.Handlers
         private static List<string> OfflinePropertyDumpSections(OfflinePlayer target)
         {
             var biota = target.Biota;
-            var sections = new List<string> { $"\nOffline character {target.Name} (0x{target.Guid.Full:X8}) - stored properties:" };
+            var sections = new List<string> { $"\nOffline character {target.Name} (0x{target.Guid.Full:X8}{(target.IsPendingDeletion ? ", pending deletion" : "")}) - stored properties:" };
 
             target.BiotaDatabaseLock.EnterReadLock();
             try
@@ -941,6 +941,13 @@ namespace ACE.Server.Command.Handlers
                     {
                         var amount = aceParams[1].AsLong;
                         var player = aceParams[0].AsPlayer;
+
+                        // bank lock (/banklock): every luminance award is banked, and a locked bank takes nothing in
+                        if (player.IsBankLocked)
+                        {
+                            session.Network.EnqueueSend(new GameMessageSystemChat($"Nothing granted: {player.Name}'s bank is locked, and luminance is paid into the bank. /bankunlock first.", ChatMessageType.Broadcast));
+                            return;
+                        }
 
                         player.GrantLuminance(amount, XpType.Admin, ShareType.None);
                         if (player.Session != null)
@@ -2241,7 +2248,7 @@ namespace ACE.Server.Command.Handlers
             else if (propType.Equals("PropertyDataId", StringComparison.OrdinalIgnoreCase))
                 value = Convert.ToString(obj.GetProperty((PropertyDataId)result));
 
-            var who = offlineObj != null ? $"{offlineObj.Name} (0x{offlineObj.Guid.Full:X8}, offline)" : $"{obj.Name} (0x{obj.Guid.Full:X8})";
+            var who = offlineObj != null ? $"{offlineObj.Name} (0x{offlineObj.Guid.Full:X8}, {CommandHandlerHelper.OfflineLabel(offlineObj)})" : $"{obj.Name} (0x{obj.Guid.Full:X8})";
             session.Network.EnqueueSend(new GameMessageSystemChat($"{who}: {prop} = {value}", ChatMessageType.Broadcast));
         }
 
@@ -2444,6 +2451,12 @@ namespace ACE.Server.Command.Handlers
                 // target's own client is told directly (commands run on the world thread, between landblock ticks)
                 SendOwnPropertyUpdate(targetPlayer, propType, result);
 
+                // the bank lock or the banked pyreals changed by hand: CoinValue is a cached total that counts banked pyreals
+                // (none while locked), and vendors check purchases against it - so it is worked out again now
+                if ((propType.Equals("PropertyBool", StringComparison.OrdinalIgnoreCase) && (PropertyBool)result == PropertyBool.BankLocked)
+                    || (propType.Equals("PropertyInt64", StringComparison.OrdinalIgnoreCase) && (PropertyInt64)result == PropertyInt64.BankedPyreals))
+                    targetPlayer.RefreshCoinValueAfterBankChange();
+
                 // a change to the unassigned XP or its saved overflow: move what fits from the bank at once, so the client
                 // is not left showing a low balance with XP saved behind it - and say what the balance and bank are now
                 if (propType.Equals("PropertyInt64", StringComparison.OrdinalIgnoreCase)
@@ -2517,7 +2530,7 @@ namespace ACE.Server.Command.Handlers
                 }
             }
 
-            target.SaveBiotaToDatabase();
+            PlayerManager.SaveOfflinePlayerNow(target);   // a failed save is retried with the next offline save cycle
 
             // the online path tops up the unassigned XP from its saved overflow at once; offline that happens the next time the
             // character spends XP (Player_Xp.RefillAvailableXpFromOverflow), so say so
@@ -2526,8 +2539,9 @@ namespace ACE.Server.Command.Handlers
                 ? " (saved XP tops up their unassigned XP the next time they spend XP)"
                 : "";
 
-            session.Network.EnqueueSend(new GameMessageSystemChat($"{target.Name} (0x{target.Guid.Full:X8}, offline): {prop} = {value}{xpNote}", ChatMessageType.Broadcast));
-            PlayerManager.BroadcastToAuditChannel(session.Player, $"{session.Player.Name} changed a property for {target.Name} ({target.Guid}, offline): {prop} = {value}{xpNote}");
+            var label = CommandHandlerHelper.OfflineLabel(target);
+            session.Network.EnqueueSend(new GameMessageSystemChat($"{target.Name} (0x{target.Guid.Full:X8}, {label}): {prop} = {value}{xpNote}", ChatMessageType.Broadcast));
+            PlayerManager.BroadcastToAuditChannel(session.Player, $"{session.Player.Name} changed a property for {target.Name} ({target.Guid}, {label}): {prop} = {value}{xpNote}");
         }
 
         /// <summary>

@@ -95,10 +95,13 @@ namespace ACE.Server.WorldObjects
 
         private void AddLuminance(long amount, XpType xpType, ShareType shareType)
         {
-            // bank lock (/banklock): every award is banked, and a locked bank takes nothing in - so nothing is paid and the
-            // player is not told it was. The allegiance's share still goes up: that is not this character's bank.
+            // bank lock (/banklock): every award is banked, and a locked bank takes nothing in - so nothing is paid, and where a
+            // paid award would say "You've banked", the player is told it was not. The allegiance's share still goes up: that
+            // is not this character's bank.
             if (IsBankLocked)
             {
+                if (xpType == XpType.Quest || xpType == XpType.Kill)
+                    Session?.Network.EnqueueSend(new GameMessageSystemChat($"Your bank is locked, so {amount:N0} Luminance was not banked.", ChatMessageType.Broadcast));
                 if (shareType.HasFlag(ShareType.Allegiance))
                     UpdateLumAllegiance(amount);
                 return;

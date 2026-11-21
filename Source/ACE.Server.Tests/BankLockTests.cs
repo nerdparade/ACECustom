@@ -1,20 +1,24 @@
 using System;
 using System.Linq;
+using System.Reflection;
 
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
+using ACE.Entity;
 using ACE.Entity.Enum;
 using ACE.Entity.Enum.Properties;
 using ACE.Entity.Models;
 using ACE.Server.Command.Handlers;
+using ACE.Server.Entity;
 using ACE.Server.Managers;
 
 namespace ACE.Server.Tests
 {
     /// <summary>
-    /// Bank lock (2026-11-20, /banklock): which properties are the bank, which NPC emote sets pay only through the bank (a
-    /// locked player keeps the item instead of handing it over for nothing), the staff write that still reaches a locked
-    /// bank, the property id, and /bankwipe confirm only wiping the character its staff member was just shown.
+    /// Bank lock (2026-11-20, /banklock): which properties are the bank, which NPC emote chains deal with an item through the
+    /// bank (a locked player keeps the item instead of handing it over for nothing) and which emote sets stop for a locked
+    /// player, the write rule and the staff write that still reaches a locked bank, the property id, and /bankwipe confirm
+    /// only wiping the character its staff member was just shown.
     /// </summary>
     [TestClass]
     [DoNotParallelize]
@@ -66,36 +70,129 @@ namespace ACE.Server.Tests
         [TestMethod]
         public void UsesBank_LuminanceAsTheOnlyReward()
         {
-            Assert.IsTrue(BankLock.UsesBank(Set(Step(EmoteType.AwardLuminance))));
-            Assert.IsTrue(BankLock.UsesBank(Set(Step(EmoteType.StampQuest), Step(EmoteType.AwardLuminance))));
+            Assert.IsTrue(BankLock.UsesBank(Set(Step(EmoteType.AwardLuminance)), null));
+            Assert.IsTrue(BankLock.UsesBank(Set(Step(EmoteType.StampQuest), Step(EmoteType.AwardLuminance)), null));
         }
 
-        /// <summary>With another reward, or a branch to steps not looked at, the hand-in goes ahead and only the luminance is not paid.</summary>
+        /// <summary>With another reward of its own the hand-in goes ahead, and only the luminance is not paid.</summary>
         [TestMethod]
-        public void UsesBank_LuminanceBesideAnotherRewardOrABranch()
+        public void UsesBank_LuminanceBesideAnotherReward()
         {
-            Assert.IsFalse(BankLock.UsesBank(Set(Step(EmoteType.AwardLuminance), Step(EmoteType.Give))));
-            Assert.IsFalse(BankLock.UsesBank(Set(Step(EmoteType.AwardXP), Step(EmoteType.AwardLuminance))));
-            Assert.IsFalse(BankLock.UsesBank(Set(Step(EmoteType.AwardLuminance), Step(EmoteType.InqQuest))));
-            Assert.IsFalse(BankLock.UsesBank(Set(Step(EmoteType.AwardLuminance), Step(EmoteType.Goto))));
+            Assert.IsFalse(BankLock.UsesBank(Set(Step(EmoteType.AwardLuminance), Step(EmoteType.Give)), null));
+            Assert.IsFalse(BankLock.UsesBank(Set(Step(EmoteType.AwardXP), Step(EmoteType.AwardLuminance)), null));
+            Assert.IsFalse(BankLock.UsesBank(Set(Step(EmoteType.AwardLuminance), Step(EmoteType.CastSpell)), null));
+            Assert.IsFalse(BankLock.UsesBank(Set(Step(EmoteType.AwardLuminance), Step(EmoteType.TeleportTarget)), null));
+            Assert.IsFalse(BankLock.UsesBank(Set(Step(EmoteType.AwardLuminance), Step(EmoteType.IncrementInt64Stat, PropertyInt64.AvailableExperience)), null));
+        }
+
+        /// <summary>A test outcome with no set of its own runs nothing, so luminance beside a test that may go nowhere can be all a run pays.</summary>
+        [TestMethod]
+        public void UsesBank_LuminanceBesideATestWithNoSets()
+        {
+            Assert.IsTrue(BankLock.UsesBank(Set(Step(EmoteType.AwardLuminance), Step(EmoteType.InqQuest, message: "q")), null));
+            Assert.IsTrue(BankLock.UsesBank(Set(Step(EmoteType.AwardLuminance), Step(EmoteType.Goto, message: "g")), null));
+        }
+
+        /// <summary>The sets a test continues in are followed: one outcome that pays only luminance keeps the item back.</summary>
+        [TestMethod]
+        public void UsesBank_FollowsTestBranches()
+        {
+            var root = Set(Step(EmoteType.InqQuest, message: "Daily"));
+            var success = Branch(EmoteCategory.QuestSuccess, "Daily", Step(EmoteType.Tell));
+            var lumOnly = Branch(EmoteCategory.QuestFailure, "daily", Step(EmoteType.AwardLuminance), Step(EmoteType.StampQuest, message: "Daily"));
+            var withXp = Branch(EmoteCategory.QuestFailure, "Daily", Step(EmoteType.AwardXP), Step(EmoteType.AwardLuminance));
+
+            Assert.IsTrue(BankLock.UsesBank(root, new[] { root, success, lumOnly }));    // the quest name matches in any case
+            Assert.IsFalse(BankLock.UsesBank(root, new[] { root, success, withXp }));
+            Assert.IsFalse(BankLock.UsesBank(root, new[] { root, success }));
+        }
+
+        /// <summary>Goto is followed too, and so is a custom Inq test that EmoteManager.EmoteIsBranchingType does not list.</summary>
+        [TestMethod]
+        public void UsesBank_FollowsGotoAndCustomInqSteps()
+        {
+            var viaGoto = Set(Step(EmoteType.Tell), Step(EmoteType.Goto, message: "Pay"));
+            var pay = Branch(EmoteCategory.GotoSet, "Pay", Step(EmoteType.IncrementInt64Stat, PropertyInt64.BankedLuminance));
+            Assert.IsTrue(BankLock.UsesBank(viaGoto, new[] { viaGoto, pay }));
+
+            var viaPetTest = Set(Step(EmoteType.InqPetRegistryCount, message: "Pets"));
+            var pets = Branch(EmoteCategory.TestSuccess, "Pets", Step(EmoteType.AwardLuminance));
+            Assert.IsTrue(BankLock.UsesBank(viaPetTest, new[] { viaPetTest, pets }));
+        }
+
+        /// <summary>Only the categories a branch continues in count, and a chain that loops back on itself ends.</summary>
+        [TestMethod]
+        public void UsesBank_IgnoresOtherCategoriesAndEndsLoops()
+        {
+            var root = Set(Step(EmoteType.Give), Step(EmoteType.Goto, message: "Loop"));
+            var loop = Branch(EmoteCategory.GotoSet, "Loop", Step(EmoteType.Goto, message: "Loop"));
+            var notABranch = Branch(EmoteCategory.Use, "Loop", Step(EmoteType.IncrementInt64Stat, PropertyInt64.BankedPyreals));
+
+            Assert.IsFalse(BankLock.UsesBank(root, new[] { root, loop, notABranch }));
         }
 
         /// <summary>The lum token NPCs pay with IncrementInt64Stat on BankedLuminance; any Int64 stat step on a balance counts, whatever else the set gives.</summary>
         [TestMethod]
         public void UsesBank_Int64StatStepsOnABalance()
         {
-            Assert.IsTrue(BankLock.UsesBank(Set(Step(EmoteType.IncrementInt64Stat, PropertyInt64.BankedLuminance))));
-            Assert.IsTrue(BankLock.UsesBank(Set(Step(EmoteType.DecrementInt64Stat, PropertyInt64.BankedPrestigeCoins))));
-            Assert.IsTrue(BankLock.UsesBank(Set(Step(EmoteType.SetInt64Stat, PropertyInt64.BankedPyreals))));
-            Assert.IsTrue(BankLock.UsesBank(Set(Step(EmoteType.Give), Step(EmoteType.IncrementInt64Stat, PropertyInt64.BankedLuminance))));
+            Assert.IsTrue(BankLock.UsesBank(Set(Step(EmoteType.IncrementInt64Stat, PropertyInt64.BankedLuminance)), null));
+            Assert.IsTrue(BankLock.UsesBank(Set(Step(EmoteType.DecrementInt64Stat, PropertyInt64.BankedPrestigeCoins)), null));
+            Assert.IsTrue(BankLock.UsesBank(Set(Step(EmoteType.SetInt64Stat, PropertyInt64.BankedPyreals)), null));
+            Assert.IsTrue(BankLock.UsesBank(Set(Step(EmoteType.Give), Step(EmoteType.IncrementInt64Stat, PropertyInt64.BankedLuminance)), null));
         }
 
         [TestMethod]
         public void UsesBank_OtherStepsDoNot()
         {
-            Assert.IsFalse(BankLock.UsesBank(Set(Step(EmoteType.Give), Step(EmoteType.IncrementInt64Stat, PropertyInt64.AvailableExperience))));
-            Assert.IsFalse(BankLock.UsesBank(Set()));
-            Assert.IsFalse(BankLock.UsesBank(null));
+            Assert.IsFalse(BankLock.UsesBank(Set(Step(EmoteType.Give), Step(EmoteType.IncrementInt64Stat, PropertyInt64.AvailableExperience)), null));
+            Assert.IsFalse(BankLock.UsesBank(Set(Step(EmoteType.Tell), Step(EmoteType.StampQuest)), null));
+            Assert.IsFalse(BankLock.UsesBank(Set(), null));
+            Assert.IsFalse(BankLock.UsesBank(null, null));
+        }
+
+        /// <summary>An emote set stops for a locked player before its next step while a bank step is still to come.</summary>
+        [TestMethod]
+        public void HasBankStep_FromTheGivenStepOn()
+        {
+            var set = Set(Step(EmoteType.Give), Step(EmoteType.DecrementInt64Stat, PropertyInt64.BankedPyreals), Step(EmoteType.Tell));
+
+            Assert.IsTrue(BankLock.HasBankStep(set));
+            Assert.IsTrue(BankLock.HasBankStep(set, 1));
+            Assert.IsFalse(BankLock.HasBankStep(set, 2));
+            Assert.IsFalse(BankLock.HasBankStep(Set(Step(EmoteType.IncrementInt64Stat, PropertyInt64.AvailableLuminance))));
+            Assert.IsFalse(BankLock.HasBankStep(null));
+        }
+
+        /// <summary>A write is refused only for a banked currency, in a locked bank, outside a staff write.</summary>
+        [TestMethod]
+        public void Refuses_OnlyABalanceOfALockedBankOutsideAStaffWrite()
+        {
+            Assert.IsTrue(BankLock.Refuses(false, true, PropertyInt64.BankedPyreals));
+            Assert.IsTrue(BankLock.Refuses(false, true, PropertyInt64.BankedEnlightenmentTokens));
+            Assert.IsFalse(BankLock.Refuses(true, true, PropertyInt64.BankedPyreals));            // /setproperty, /bankwipe
+            Assert.IsFalse(BankLock.Refuses(false, false, PropertyInt64.BankedPyreals));          // not locked
+            Assert.IsFalse(BankLock.Refuses(false, true, PropertyInt64.AvailableExperience));     // not the bank
+        }
+
+        /// <summary>The lock read off a character, and the setters' test on it: refused only for a locked bank's balances outside a staff write.</summary>
+        [TestMethod]
+        public void RefusesWrite_ALockedCharactersBalances()
+        {
+            var locked = StubCharacter.Create(true);
+            var unlocked = StubCharacter.Create(false);
+
+            Assert.IsTrue(BankLock.IsLocked(locked));
+            Assert.IsFalse(BankLock.IsLocked(unlocked));
+            Assert.IsFalse(BankLock.IsLocked(null));
+
+            Assert.IsTrue(BankLock.RefusesWrite(locked, PropertyInt64.BankedLuminance));
+            Assert.IsFalse(BankLock.RefusesWrite(locked, PropertyInt64.AvailableLuminance));
+            Assert.IsFalse(BankLock.RefusesWrite(unlocked, PropertyInt64.BankedLuminance));
+
+            using (BankLock.AdminWrite())
+                Assert.IsFalse(BankLock.RefusesWrite(locked, PropertyInt64.BankedLuminance));
+
+            Assert.IsTrue(BankLock.RefusesWrite(locked, PropertyInt64.BankedLuminance));   // closed again
         }
 
         /// <summary>A staff write is open until its last scope is closed, and closing one twice does not close another.</summary>
@@ -106,14 +203,23 @@ namespace ACE.Server.Tests
 
             var outer = BankLock.AdminWrite();
             var inner = BankLock.AdminWrite();
-            Assert.IsTrue(BankLock.AdminWriteOpen);
+            try
+            {
+                Assert.IsTrue(BankLock.AdminWriteOpen);
 
-            inner.Dispose();
-            inner.Dispose();
-            Assert.IsTrue(BankLock.AdminWriteOpen);
+                inner.Dispose();
+                inner.Dispose();
+                Assert.IsTrue(BankLock.AdminWriteOpen);
 
-            outer.Dispose();
-            Assert.IsFalse(BankLock.AdminWriteOpen);
+                outer.Dispose();
+                Assert.IsFalse(BankLock.AdminWriteOpen);
+            }
+            finally
+            {
+                // a failed assert must not leave this thread's staff write open for the next test
+                inner.Dispose();
+                outer.Dispose();
+            }
         }
 
         /// <summary>PropertyBool.BankLocked is 56300, and 56300 is free in every other property enum.</summary>
@@ -163,22 +269,55 @@ namespace ACE.Server.Tests
             Assert.IsTrue(BankWipePreviews.TryConsume(0x50000031, 0x50000301, now));
         }
 
-        private static PropertiesEmote Set(params PropertiesEmoteAction[] steps)
+        /// <summary>
+        /// A character with nothing but a name, an id and the bank lock flag: an IPlayer made at run time (DispatchProxy, so no
+        /// mocking library). Every other member returns its type's default.
+        /// </summary>
+        public class StubCharacter : DispatchProxy
         {
-            var set = new PropertiesEmote { Category = EmoteCategory.Give, Probability = 1, Quest = "" };
+            private bool locked;
+
+            public static IPlayer Create(bool locked)
+            {
+                var character = DispatchProxy.Create<IPlayer, StubCharacter>();
+                ((StubCharacter)(object)character).locked = locked;
+                return character;
+            }
+
+            protected override object Invoke(MethodInfo targetMethod, object[] args)
+            {
+                if (targetMethod.Name == "GetProperty" && args?.Length == 1 && args[0] is PropertyBool property)
+                    return property == PropertyBool.BankLocked && locked ? true : (bool?)null;
+                if (targetMethod.Name == "get_Name")
+                    return "Stub";
+                if (targetMethod.Name == "get_Guid")
+                    return new ObjectGuid(0x50000001);
+
+                var type = targetMethod.ReturnType;
+                return type.IsValueType && type != typeof(void) ? Activator.CreateInstance(type) : null;
+            }
+        }
+
+        /// <summary>A Give set, as an NPC hand-in runs.</summary>
+        private static PropertiesEmote Set(params PropertiesEmoteAction[] steps) => Branch(EmoteCategory.Give, "", steps);
+
+        /// <summary>A set of the given category and quest - where a test or a Goto with that quest as its Message continues.</summary>
+        private static PropertiesEmote Branch(EmoteCategory category, string quest, params PropertiesEmoteAction[] steps)
+        {
+            var set = new PropertiesEmote { Category = category, Probability = 1, Quest = quest };
             foreach (var step in steps)
                 set.PropertiesEmoteAction.Add(step);
             return set;
         }
 
-        private static PropertiesEmoteAction Step(EmoteType type, PropertyInt64? stat = null)
+        private static PropertiesEmoteAction Step(EmoteType type, PropertyInt64? stat = null, string message = "")
         {
             return new PropertiesEmoteAction
             {
                 Type = (uint)type,
                 Delay = 0,
                 Extent = 0,
-                Message = "",
+                Message = message,
                 TestString = "",
                 Stat = stat.HasValue ? (int?)(int)stat.Value : null,
                 Amount64 = 1,

@@ -241,19 +241,41 @@ namespace ACE.Server.Command.Handlers
                 return target != null || offline != null;
             }
 
-            target = PlayerManager.GetOnlinePlayer(text);   // case-insensitive, with or without the + admin prefix
-            if (target == null && allowOffline)
-                offline = PlayerManager.GetOfflinePlayer(text);
-            if (target == null && offline == null)
-                WriteOutputInfo(session, allowOffline ? $"No character named {text} - nothing done." : $"No online player named {text} - nothing done.");
-            return target != null || offline != null;
+            if (!allowOffline)
+            {
+                target = PlayerManager.GetOnlinePlayer(text);   // case-insensitive, with or without the + admin prefix
+                if (target == null)
+                    WriteOutputInfo(session, $"No online player named {text} - nothing done.");
+                return target != null;
+            }
+
+            var character = FindCharacterByName(text);
+            target = character as Player;
+            offline = character as OfflinePlayer;
+            if (character == null)
+                WriteOutputInfo(session, $"No character named {text} - nothing done.");
+            return character != null;
         }
+
+        /// <summary>
+        /// A character by name, case-insensitive, with or without the + admin prefix: an online player first, then an offline
+        /// character that is not pending deletion (PlayerManager.FindByName), then one that is. A deleted character's name can
+        /// be taken again, so the live character comes first - the one pending deletion is still found when it is the only one.
+        /// </summary>
+        private static IPlayer FindCharacterByName(string name)
+            => PlayerManager.FindByName(name) ?? PlayerManager.GetOfflinePlayer(name);
+
+        /// <summary>
+        /// "offline", or "offline, pending deletion" - how an offline character is labelled in staff command output.
+        /// </summary>
+        public static string OfflineLabel(IPlayer character)
+            => character.IsPendingDeletion ? "offline, pending deletion" : "offline";
 
         /// <summary>
         /// The character a staff command names (2026-11-20, /bankwipe, /banklock, /bankunlock): the arguments from
         /// <paramref name="firstParameter"/> on are a character name (case-insensitive, with or without the + admin prefix,
-        /// spaces allowed) or an id (decimal, or 0x hex). An online player is found first, then an offline character (one
-        /// pending deletion included). False, reported, when there is none.
+        /// spaces allowed) or an id (decimal, or 0x hex). An online player is found first, then an offline character - by name,
+        /// one that is not pending deletion before one that is (FindCharacterByName). False, reported, when there is none.
         /// </summary>
         /// <param name="session">The admin's session</param>
         /// <param name="parameters">All the command's arguments</param>
@@ -280,7 +302,7 @@ namespace ACE.Server.Command.Handlers
                 return character != null;
             }
 
-            character = (IPlayer)PlayerManager.GetOnlinePlayer(text) ?? PlayerManager.GetOfflinePlayer(text);
+            character = FindCharacterByName(text);
             if (character == null)
                 WriteOutputInfo(session, $"No character named {text} - nothing done.");
             return character != null;

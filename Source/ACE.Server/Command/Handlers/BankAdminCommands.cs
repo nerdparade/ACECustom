@@ -172,10 +172,10 @@ namespace ACE.Server.Command.Handlers
             CommandHandlerHelper.WriteOutputInfo(session, sb.ToString());
         }
 
-        /// <summary>"Name (0x50001234, online)"</summary>
+        /// <summary>"Name (0x50001234, online)", "(..., offline)" or "(..., offline, pending deletion)"</summary>
         private static string Who(IPlayer character)
         {
-            return $"{character.Name} (0x{character.Guid.Full:X8}, {(character is Player ? "online" : "offline")})";
+            return $"{character.Name} (0x{character.Guid.Full:X8}, {(character is Player ? "online" : CommandHandlerHelper.OfflineLabel(character))})";
         }
     }
 
@@ -204,12 +204,6 @@ namespace ACE.Server.Command.Handlers
                 return false;
 
             return previews.TryRemove(staff, out _);
-        }
-
-        /// <summary>Forgets every preview (tests).</summary>
-        internal static void Clear()
-        {
-            previews.Clear();
         }
     }
 }
