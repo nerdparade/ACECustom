@@ -26,7 +26,7 @@ namespace ACE.Server.Command.Handlers
     {
         private static readonly ILog log = LogManager.GetLogger(System.Reflection.MethodBase.GetCurrentMethod().DeclaringType);
 
-        [CommandHandler("bankwipe", AccessLevel.Admin, CommandHandlerFlag.RequiresWorld, 1,
+        [CommandHandler("bankwipe", AccessLevel.Developer, CommandHandlerFlag.RequiresWorld, 1,
             "Wipes every banked currency of a character, online or offline, to 0. Shows the bank first; /bankwipe confirm <id> wipes it.",
             "<character name or id> - shows the bank\n/bankwipe confirm <character id> - wipes it to 0")]
         public static void HandleBankWipe(Session session, params string[] parameters)
@@ -87,7 +87,7 @@ namespace ACE.Server.Command.Handlers
             log.Info($"[BankWipe] {session.Player.Name} {line}");
         }
 
-        [CommandHandler("banklock", AccessLevel.Admin, CommandHandlerFlag.RequiresWorld, 0,
+        [CommandHandler("banklock", AccessLevel.Developer, CommandHandlerFlag.RequiresWorld, 0,
             "Locks a character's bank, online or offline: nothing goes in or out, by any path, until /bankunlock. With no name, lists the locked banks.",
             "[character name or id]")]
         public static void HandleBankLock(Session session, params string[] parameters)
@@ -116,7 +116,7 @@ namespace ACE.Server.Command.Handlers
             log.Info($"[BankLock] {session.Player.Name} {line}");
         }
 
-        [CommandHandler("bankunlock", AccessLevel.Admin, CommandHandlerFlag.RequiresWorld, 1,
+        [CommandHandler("bankunlock", AccessLevel.Developer, CommandHandlerFlag.RequiresWorld, 1,
             "Unlocks a character's bank that /banklock locked, online or offline.",
             "<character name or id>")]
         public static void HandleBankUnlock(Session session, params string[] parameters)
